@@ -16,22 +16,33 @@ section_index = None
 wings_dir = os.path.dirname(os.path.realpath(__file__))
 list_of_things_to_not_delete = []
 
+type = 0
+
 class Wing(Object):
     def __init__(self):
-        Object.__init__(self)
-        self.SetUsesGLList(True)
+        Object.__init__(self, 0)
         
         # properties
         self.sketch_ids = [0,0,0,0,0]
         self.mirror = False
         self.centre_straight = True
         self.color = cad.Color(128, 128, 128)
+        self.draw_list = None
         
         self.box = None  # if box is None, then the curves need reloading
         self.ResetCurves()
         
-    def GetTitle(self):
+    def GetType(self):
+        return type
+
+    def TypeName(self):
         return "Wing"
+    
+    def GetTypeString(self):
+        return self.TypeName()
+    
+    def HasColor(self):
+        return False
     
     def GetIconFilePath(self):
         return wings_dir + '/icons/wing.png'
@@ -40,6 +51,11 @@ class Wing(Object):
         self.curves = []
         for id in self.sketch_ids:
             self.curves.append(None)
+            
+    def KillGLLists(self):
+        if self.draw_list:
+            cad.DrawDeleteList(self.draw_list)
+        self.draw_list = None
                                             
     def Recalculate(self):
         self.KillGLLists()
@@ -58,9 +74,6 @@ class Wing(Object):
             if self.curves[i] != None:
                 curve_box = self.curves[i].GetBox()
                 self.box.InsertBox(geom.Box3D(curve_box.MinX(), curve_box.MinY(), 0.0, curve_box.MaxX(), curve_box.MaxY(), 0.0))
-
-    def GetTypeString(self):
-        return "Wing"
 
     def GetUnitizedSectionPoints(self, tip_fraction):
         # the start point will be geom.Point(0,0) and the last point will be geom.Point(1,0)
@@ -172,21 +185,31 @@ class Wing(Object):
             outline.WriteDxf(area_fp)
             cad.Import(area_fp)
         
-    def OnRenderTriangles(self):
-        if self.box == None:
-            self.SketchesToCurves()
-            self.CalculateBox()
-        
-        if self.curves[0] == None:
-            return # can't draw anything without a leading edge
-        
-        global section_index
-        section_index = 0
-        
-        # use the spans of trailing edge to define the sections
-        for span in self.curves[1].GetSpans():
-            self.DrawSection(span)
-            section_index += 1
+    def OnGlCommands(self, select, marked, no_color):
+        if not no_color:
+            cad.DrawEnableLighting()
+            cad.Material(self.color).glMaterial(1.0)
+            
+        if self.draw_list:
+            cad.DrawCallList(self.draw_list)
+        else:
+            self.draw_list = cad.DrawNewList()
+            if self.box == None:
+                self.SketchesToCurves()
+                self.CalculateBox()
+            
+            if self.curves[0] != None and self.curves[1] != None: # can't draw anything without a leading edge nor a trailing edge
+                global section_index
+                section_index = 0
+                
+                # use the spans of trailing edge to define the sections
+                for span in self.curves[1].GetSpans():
+                    self.DrawSection(span)
+                    section_index += 1
+            cad.DrawEndList()
+            
+        if not no_color:
+            cad.DrawDisableLighting()
                 
     def GetProperties(self):
         properties = []
@@ -208,19 +231,27 @@ class Wing(Object):
     def SetColor(self, col):
         self.color = col
         
-    def GetBox(self):
+    def GetBox(self, box):
         if self.box == None:
             self.SketchesToCurves()
             self.CalculateBox()
 
-        return self.box.MinX(), self.box.MinY(), self.box.MinZ(), self.box.MaxX(), self.box.MaxY(), self.box.MaxZ()
+        box.InsertBox(self.box)
         
-    def WriteXML(self):
-        cad.SetXmlValue('col', str(self.color.ref()))
+    def WriteXml(self):
+        cad.SetXmlValue('col', self.color.ref())
         for i in range(0, len(self.sketch_ids)):
-            cad.SetXmlValue(sketch_xml_names[i], str(self.sketch_ids[i]))
-        cad.SetXmlValue('mirror', str(self.mirror))
-        cad.SetXmlValue('centre_straight', str(self.centre_straight))
+            cad.SetXmlValue(sketch_xml_names[i], self.sketch_ids[i])
+        cad.SetXmlValue('mirror', self.mirror)
+        cad.SetXmlValue('centre_straight', self.centre_straight)
+        
+    def ReadXml(self):
+        self.color = cad.Color(cad.GetXmlInt('col', self.color.ref()))
+        for i in range(0, len(sketch_xml_names)):
+            self.sketch_ids[i] = cad.GetXmlInt(sketch_xml_names[i], 0)
+        self.mirror = cad.GetXmlBool('mirror')
+        self.centre_straight = cad.GetXmlBool('centre_straight')
+        Object.ReadXml(self)
         
     def GetTools(self):
         global wing_for_tools
@@ -318,6 +349,7 @@ def DrawTrianglesBetweenPoints(prev_p0, prev_p1, p0, p1, mirror):
     if mirror:
         cad.DrawTriangle(-prev_p0.x, prev_p0.y, prev_p0.z, -p1.x, p1.y, p1.z, -p0.x, p0.y, p0.z)
         cad.DrawTriangle(-prev_p0.x, prev_p0.y, prev_p0.z, -prev_p1.x, prev_p1.y, prev_p1.z, -p1.x, p1.y, p1.z)
+    cad.EndLinesOrTriangles()
 
 def GetMinXPoint(curve):
     minxp = None
